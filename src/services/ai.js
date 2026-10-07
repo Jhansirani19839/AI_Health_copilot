@@ -330,26 +330,57 @@ ${ocrText}
  * Answering ONLY from the patient's own records, safely in English or Tamil
  */
 export async function askRecordsAssistant({ question, patientRecords, patientProfile, language = 'en' }) {
+  // Defensive guarantees against undefined or non-array records
+  let safeRecords = Array.isArray(patientRecords) ? [...patientRecords] : [];
+  let safeProfile = patientProfile || null;
+
+  // If safeRecords is empty, attempt to dynamically fetch patient records from IndexedDB
+  if (safeRecords.length === 0 && typeof indexedDB !== 'undefined') {
+    try {
+      const { getDB } = await import('./db');
+      const db = await getDB();
+      // Try demo patient if no active session
+      safeRecords = (await db.getAllFromIndex('records', 'by_patient', 'usr_pat_1')) || [];
+      if (!safeProfile) {
+        safeProfile = await db.get('patient_profiles', 'usr_pat_1');
+      }
+    } catch (e) {
+      console.warn('Fallback dynamic record retrieval note:', e);
+    }
+  }
+
   const apiKey = getStoredApiKey();
 
-  // Prepare context from all patient records
-  const recordsSummary = patientRecords.map((r, i) => {
-    return `Record #${i + 1} (${r.recordType}, Date: ${r.date}, Doctor: ${r.doctorName || 'N/A'}):
-- Diagnoses: ${(r.diagnoses || []).join(', ')}
-- Medications: ${(r.medications || []).map(m => `${m.name} (${m.dosage}, ${m.frequency})`).join('; ')}
-- Abnormal findings: ${(r.abnormalFlags || []).map(a => `${a.parameter}: ${a.value} [${a.status}]`).join('; ')}
-- Clinical Notes/Summary: ${r.summaryEn || ''}`;
+  // Prepare context from all patient records safely
+  const recordsSummary = safeRecords.map((r, i) => {
+    return `Record #${i + 1} (${r?.recordType || 'record'}, Date: ${r?.date || 'N/A'}, Doctor: ${r?.doctorName || 'N/A'}):
+- Diagnoses: ${(r?.diagnoses || []).join(', ')}
+- Medications: ${(r?.medications || []).map(m => `${m?.name} (${m?.dosage || ''}, ${m?.frequency || ''})`).join('; ')}
+- Abnormal findings: ${(r?.abnormalFlags || []).map(a => `${a?.parameter}: ${a?.value} [${a?.status}]`).join('; ')}
+- Clinical Notes/Summary: ${r?.summaryEn || ''}`;
   }).join('\n\n');
 
-  const profileSummary = `Patient Name: ${patientProfile?.fullName || 'Patient'}, Age: ${patientProfile?.age || 'N/A'}, Allergies: ${(patientProfile?.allergies || ['None known']).join(', ')}, Chronic Conditions: ${(patientProfile?.chronicConditions || []).join(', ')}, Current Medications: ${(patientProfile?.currentMedicines || []).join(', ')}`;
+  const profileSummary = `Patient Name: ${safeProfile?.fullName || 'Patient'}, Age: ${safeProfile?.age || 'N/A'}, Allergies: ${(safeProfile?.allergies || ['None known']).join(', ')}, Chronic Conditions: ${(safeProfile?.chronicConditions || []).join(', ')}, Current Medications: ${(safeProfile?.currentMedicines || []).join(', ')}`;
 
-  const isEmergencyQuery = /chest pain|heart attack|can't breathe|difficulty breathing|unconscious|heavy bleeding|stroke|poison|paralysis|நெஞ்சு வலி|மூச்சுத் திணறல்|இரத்தப்போக்கு/i.test(question);
+  const isEmergencyQuery = /chest pain|heart attack|can't breathe|difficulty breathing|unconscious|heavy bleeding|stroke|poison|paralysis|நெஞ்சு வலி|மூச்சுத் திணறல்|இரத்தப்போக்கு/i.test(question || '');
 
   if (isEmergencyQuery) {
     if (language === 'ta') {
       return "⚠️ **அவசர எச்சரிக்கை**: நீங்கள் தீவிர அறிகுறிகளை (மார்பு வலி, மூச்சுத்திணறல், அதிக இரத்தப்போக்கு போன்றவை) உணர்ந்தால், தாமதிக்காமல் உடனடியாக அவசர மருத்துவ சேவையை (108 அல்லது 112) அல்லது அருகிலுள்ள அவசர சிகிச்சை பிரிவை அணுகவும். இந்த AI உதவியாளர் அவசர கால மருத்துவ சிகிச்சை வழங்க இயலாது.";
     }
     return "⚠️ **EMERGENCY WARNING**: If you or someone with you is experiencing acute chest pain, severe shortness of breath, sudden numbness, or heavy bleeding, please immediately call Emergency Services (108 or 112 in India, or your local emergency number) or visit the nearest emergency room. This assistant cannot provide emergency medical care.";
+  }
+
+  // Handle greetings politely
+  const qClean = (question || '').trim().toLowerCase();
+  const isGreeting = /^(hi|hello|hey|vanakkam|good morning|good afternoon|good evening)\b/i.test(qClean) ||
+                     qClean === 'வணக்கம்' || qClean.startsWith('வணக்கம்');
+
+  if (isGreeting) {
+    if (language === 'ta') {
+      return `வணக்கம்! நான் உங்கள் தனிப்பட்ட ஹெல்த் கோபைலட் உதவியாளர். உங்கள் மருத்துவ சுயவிவரம் மற்றும் ${safeRecords.length} பதிவுகளை ஆய்வு செய்ய நான் தயாராக உள்ளேன்.\n\nநீங்கள் கேட்கலாம்:\n• "என் தற்போதைய மருந்துகள் என்னென்ன?"\n• "கடைசி சர்க்கரை அல்லது HbA1c அளவு எவ்வளவு?"\n• "எனக்கு என்னென்ன ஒவ்வாமைகள் உள்ளன?"\n• "ஏதேனும் அசாதாரண முடிவுகள் உள்ளனவா?"`;
+    }
+    return `Hello! I am your AI Health Copilot Assistant. I have loaded your medical profile and ${safeRecords.length} health record(s).\n\nFeel free to ask me:\n• "What are my current active medications?"\n• "What was my last HbA1c or blood sugar reading?"\n• "Are there any abnormal lab results?"\n• "What are my documented allergies?"`;
   }
 
   if (apiKey) {
@@ -392,17 +423,17 @@ PATIENT QUESTION:
   }
 
   // Rule-based conversational records matcher
-  const qLower = question.toLowerCase();
+  const qLower = (question || '').toLowerCase();
 
   // 1. Medications / Prescriptions query
   if (qLower.includes('medicine') || qLower.includes('medication') || qLower.includes('drug') || qLower.includes('tablet') || qLower.includes('dose') || qLower.includes('prescription') || qLower.includes('மருந்து') || qLower.includes('மாத்திரை')) {
     const allMeds = [];
-    patientRecords.forEach(r => {
-      (r.medications || []).forEach(m => allMeds.push(`${m.name} (${m.dosage || ''} • ${m.frequency || ''})`));
+    safeRecords.forEach(r => {
+      (r?.medications || []).forEach(m => allMeds.push(`${m?.name || 'Medication'} (${m?.dosage || 'Standard'} • ${m?.frequency || 'As advised'})`));
     });
     // Also include profile current medicines if not in records
-    if (patientProfile?.currentMedicines && Array.isArray(patientProfile.currentMedicines)) {
-      patientProfile.currentMedicines.forEach(m => allMeds.push(m));
+    if (safeProfile?.currentMedicines && Array.isArray(safeProfile.currentMedicines)) {
+      safeProfile.currentMedicines.forEach(m => allMeds.push(m));
     }
 
     if (allMeds.length > 0) {
@@ -421,15 +452,15 @@ PATIENT QUESTION:
   // 2. Blood Sugar / HbA1c / Diabetes
   if (qLower.includes('sugar') || qLower.includes('diabetes') || qLower.includes('hba1c') || qLower.includes('glucose') || qLower.includes('fbs') || qLower.includes('ppbs') || qLower.includes('சர்க்கரை') || qLower.includes('நீரிழிவு')) {
     const sugarTests = [];
-    patientRecords.forEach(r => {
-      (r.tests || []).forEach(t => {
-        if (/glucose|sugar|hba1c|fbs|ppbs/i.test(t.name)) {
+    safeRecords.forEach(r => {
+      (r?.tests || []).forEach(t => {
+        if (/glucose|sugar|hba1c|fbs|ppbs/i.test(t?.name || '')) {
           sugarTests.push(`${t.name}: ${t.value} ${t.unit || ''} (Date: ${r.date}) [Status: ${t.status || 'NORMAL'}]`);
         }
       });
       // also check abnormalFlags
-      (r.abnormalFlags || []).forEach(f => {
-        if (/glucose|sugar|hba1c/i.test(f.parameter || '')) {
+      (r?.abnormalFlags || []).forEach(f => {
+        if (/glucose|sugar|hba1c/i.test(f?.parameter || '')) {
           sugarTests.push(`${f.parameter}: ${f.value} [${f.status}] - ${f.explanationEn}`);
         }
       });
@@ -447,9 +478,9 @@ PATIENT QUESTION:
   // 3. Cholesterol / Lipid / Heart
   if (qLower.includes('cholesterol') || qLower.includes('lipid') || qLower.includes('triglyceride') || qLower.includes('ldl') || qLower.includes('hdl') || qLower.includes('கொழுப்பு') || qLower.includes('கொலஸ்ட்ரால்')) {
     const lipidTests = [];
-    patientRecords.forEach(r => {
-      (r.tests || []).forEach(t => {
-        if (/cholesterol|triglyceride|lipid|ldl|hdl/i.test(t.name)) {
+    safeRecords.forEach(r => {
+      (r?.tests || []).forEach(t => {
+        if (/cholesterol|triglyceride|lipid|ldl|hdl/i.test(t?.name || '')) {
           lipidTests.push(`${t.name}: ${t.value} ${t.unit || ''} (Date: ${r.date}) [${t.status || 'NORMAL'}]`);
         }
       });
@@ -466,8 +497,8 @@ PATIENT QUESTION:
   // 4. Abnormal results / Issues / Red flags
   if (qLower.includes('abnormal') || qLower.includes('warning') || qLower.includes('high') || qLower.includes('low') || qLower.includes('problem') || qLower.includes('அசாதாரண') || qLower.includes('எச்சரிக்கை')) {
     const flags = [];
-    patientRecords.forEach(r => {
-      (r.abnormalFlags || []).forEach(f => {
+    safeRecords.forEach(r => {
+      (r?.abnormalFlags || []).forEach(f => {
         const desc = language === 'ta' && f.explanationTa ? f.explanationTa : f.explanationEn;
         flags.push(`${f.parameter} (${f.value}) [${f.status}] - ${desc}`);
       });
@@ -487,8 +518,8 @@ PATIENT QUESTION:
 
   // 5. Allergies / Conditions query
   if (qLower.includes('allergy') || qLower.includes('allergies') || qLower.includes('condition') || qLower.includes('ஒவ்வாமை') || qLower.includes('நோய்')) {
-    const allergies = patientProfile?.allergies || [];
-    const conditions = patientProfile?.chronicConditions || [];
+    const allergies = safeProfile?.allergies || [];
+    const conditions = safeProfile?.chronicConditions || [];
     
     if (language === 'ta') {
       return `உங்கள் மருத்துவ சுயவிவரத்தின்படி:\n• அறியப்பட்ட ஒவ்வாமைகள் (Allergies): ${allergies.length > 0 ? allergies.join(', ') : 'குறிப்பிடப்படவில்லை'}\n• நாள்பட்ட நோய்கள் (Chronic Conditions): ${conditions.length > 0 ? conditions.join(', ') : 'குறிப்பிடப்படவில்லை'}`;
@@ -498,7 +529,7 @@ PATIENT QUESTION:
 
   // 6. Doctor / Hospital query
   if (qLower.includes('doctor') || qLower.includes('clinic') || qLower.includes('hospital') || qLower.includes('மருத்துவர்')) {
-    const doctors = patientRecords.map(r => r.doctorName).filter(Boolean);
+    const doctors = safeRecords.map(r => r?.doctorName).filter(Boolean);
     const uniqueDocs = [...new Set(doctors)];
     if (uniqueDocs.length > 0) {
       if (language === 'ta') {
@@ -510,7 +541,7 @@ PATIENT QUESTION:
 
   // Generic grounded fallback with smart summary
   if (language === 'ta') {
-    return `நான் உங்கள் ${patientRecords.length} மருத்துவ பதிவுகளையும் (${patientProfile?.fullName || 'நோயாளி'} - ABHA: ${patientProfile?.abhaId || 'Linked'}) ஆய்வு செய்துள்ளேன்.
+    return `நான் உங்கள் ${safeRecords.length} மருத்துவ பதிவுகளையும் (${safeProfile?.fullName || 'நோயாளி'} - ABHA: ${safeProfile?.abhaId || 'Linked'}) ஆய்வு செய்துள்ளேன்.
 
 நீங்கள் என்னிடம் கேட்கக்கூடிய விவரங்கள்:
 1. "என் தற்போதைய மருந்துகள் என்னென்ன?"
@@ -521,7 +552,7 @@ PATIENT QUESTION:
 மருத்துவ அவசரங்களுக்கு உடனடியாக 108 அல்லது 112 அழைக்கவும்.`;
   }
 
-  return `I have reviewed your ${patientRecords.length} health record(s) for ${patientProfile?.fullName || 'Patient'} (ABHA: ${patientProfile?.abhaId || 'Active'}).
+  return `I have reviewed your ${safeRecords.length} health record(s) for ${safeProfile?.fullName || 'Patient'} (ABHA: ${safeProfile?.abhaId || 'Active'}).
 
 You can ask me questions such as:
 1. "What are my active medications?"

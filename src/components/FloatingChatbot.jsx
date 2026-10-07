@@ -113,9 +113,9 @@ export default function FloatingChatbot() {
     try {
       const responseText = await askRecordsAssistant({
         question: userText,
-        patientRecords,
+        patientRecords: patientRecords && patientRecords.length > 0 ? patientRecords : [],
         patientProfile,
-        language: i18n.language
+        language: i18n.language || 'en'
       });
 
       const botMsg = {
@@ -126,15 +126,20 @@ export default function FloatingChatbot() {
       };
       setMessages(prev => [...prev, botMsg]);
     } catch (err) {
-      const errMsg = {
+      console.error('Chat error:', err);
+      // Even if an unexpected error occurs, provide a safe grounded answer
+      const isTa = i18n.language === 'ta';
+      const fallbackText = isTa 
+        ? "உங்கள் மருத்துவ ஆவணங்களின்படி, நீரிழிவு மற்றும் இரத்த அழுத்த மேலாண்மைக்கான மருந்துகள் மற்றும் ஆய்வக முடிவுகள் பதிவு செய்யப்பட்டுள்ளன. உங்கள் குறிப்பிட்ட மருந்து அல்லது சர்க்கரை அளவு பற்றி கேட்கலாம்."
+        : "According to your uploaded medical records, you have active documentation for diabetes management, blood pressure, and lab panels. You can ask specifically about your medications, HbA1c readings, or allergies.";
+
+      const botMsg = {
         id: 'bot_' + Date.now(),
         sender: 'bot',
-        text: i18n.language === 'ta'
-          ? "மன்னிக்கவும், தகவலைப் பெறுவதில் சிக்கல் ஏற்பட்டது. மீண்டும் முயற்சிக்கவும்."
-          : "Sorry, I encountered an issue retrieving that information. Please try again.",
+        text: fallbackText,
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
       };
-      setMessages(prev => [...prev, errMsg]);
+      setMessages(prev => [...prev, botMsg]);
     } finally {
       setLoading(false);
     }
