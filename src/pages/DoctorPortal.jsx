@@ -81,6 +81,9 @@ export default function DoctorPortal() {
   // Select patient and load their records and notes
   const selectPatient = async (patient) => {
     setSelectedPatient(patient);
+    if (patient?.userId) {
+      sessionStorage.setItem('ahc_active_doctor_patient_id', patient.userId);
+    }
     try {
       const db = await getDB();
       const recs = await db.getAllFromIndex('records', 'by_patient', patient.userId);

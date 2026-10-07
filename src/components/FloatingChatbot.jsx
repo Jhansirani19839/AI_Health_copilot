@@ -32,6 +32,7 @@ export default function FloatingChatbot() {
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   const [patientRecords, setPatientRecords] = useState([]);
+  const [activeProfile, setActiveProfile] = useState(null);
   const messagesEndRef = useRef(null);
 
   // Load records for patient (or demo records if not logged in or in quick-scan mode)
@@ -44,9 +45,17 @@ export default function FloatingChatbot() {
 
         if (currentUser && currentUser.role === 'patient') {
           recs = await db.getAllFromIndex('records', 'by_patient', currentUser.id);
+          if (!profile) {
+            profile = await db.get('patient_profiles', currentUser.id);
+          }
         } else if (currentUser && currentUser.role === 'doctor') {
-          // In doctor view, load all clinical records so assistant can answer clinical questions
-          recs = await db.getAll('records');
+          // In doctor view, load patient records from active patient or all records
+          const lastDoctorPatientId = sessionStorage.getItem('ahc_active_doctor_patient_id') || 'usr_pat_1';
+          recs = await db.getAllFromIndex('records', 'by_patient', lastDoctorPatientId);
+          profile = await db.get('patient_profiles', lastDoctorPatientId);
+          if (!recs || recs.length === 0) {
+            recs = await db.getAll('records');
+          }
         } else {
           // If guest or anonymous user in Quick Scan, check if there is an active quick scan or load demo sample
           const pendingScan = sessionStorage.getItem('ahc_pending_record');
@@ -64,6 +73,7 @@ export default function FloatingChatbot() {
           }
         }
         setPatientRecords(recs || []);
+        setActiveProfile(profile || currentProfile);
       } catch (e) {
         console.error('Chatbot failed to load medical context', e);
       }
@@ -94,16 +104,15 @@ export default function FloatingChatbot() {
     }
   }, [messages, isOpen]);
 
-  const handleSend = async (e) => {
-    e?.preventDefault();
-    if (!input.trim() || loading) return;
+  const handleSendText = async (rawText) => {
+    const textToSend = (rawText || '').trim();
+    if (!textToSend || loading) return;
 
-    const userText = input.trim();
     setInput('');
     const userMsg = {
       id: 'usr_' + Date.now(),
       sender: 'user',
-      text: userText,
+      text: textToSend,
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
     };
 
@@ -112,9 +121,9 @@ export default function FloatingChatbot() {
 
     try {
       const responseText = await askRecordsAssistant({
-        question: userText,
+        question: textToSend,
         patientRecords: patientRecords && patientRecords.length > 0 ? patientRecords : [],
-        patientProfile,
+        patientProfile: activeProfile || currentProfile,
         language: i18n.language || 'en'
       });
 
@@ -143,6 +152,11 @@ export default function FloatingChatbot() {
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleSend = async (e) => {
+    e?.preventDefault();
+    await handleSendText(input);
   };
 
   const samplePrompts = i18n.language === 'ta' ? [
@@ -257,8 +271,11 @@ export default function FloatingChatbot() {
             {samplePrompts.map((p, idx) => (
               <button
                 key={idx}
+                type="button"
                 onClick={() => {
                   setInput(p);
+                  // Trigger send for prompt chip
+                  handleSendText(p);
                 }}
                 className="whitespace-nowrap px-2.5 py-1 text-[11px] bg-slate-100 hover:bg-teal-50 hover:text-teal-700 text-slate-600 rounded-full transition border border-slate-200 cursor-pointer"
               >
