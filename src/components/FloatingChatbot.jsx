@@ -34,17 +34,59 @@ export default function FloatingChatbot() {
   const [patientRecords, setPatientRecords] = useState([]);
   const messagesEndRef = useRef(null);
 
-  // Load records for patient
+  // Load records for patient (or demo records if not logged in or in quick-scan mode)
   useEffect(() => {
     async function loadData() {
-      if (currentUser && currentUser.role === 'patient') {
+      try {
         const db = await getDB();
-        const records = await db.getAllFromIndex('records', 'by_patient', currentUser.id);
-        setPatientRecords(records || []);
+        let recs = [];
+        let profile = currentProfile;
+
+        if (currentUser && currentUser.role === 'patient') {
+          recs = await db.getAllFromIndex('records', 'by_patient', currentUser.id);
+        } else if (currentUser && currentUser.role === 'doctor') {
+          // In doctor view, load all clinical records so assistant can answer clinical questions
+          recs = await db.getAll('records');
+        } else {
+          // If guest or anonymous user in Quick Scan, check if there is an active quick scan or load demo sample
+          const pendingScan = sessionStorage.getItem('ahc_pending_record');
+          if (pendingScan) {
+            try {
+              recs = [JSON.parse(pendingScan)];
+            } catch (e) {
+              console.error(e);
+            }
+          }
+          if (recs.length === 0) {
+            // Load patient 1 (Suresh Kumar) as standard context for interactive preview
+            recs = await db.getAllFromIndex('records', 'by_patient', 'usr_pat_1');
+            profile = await db.get('patient_profiles', 'usr_pat_1');
+          }
+        }
+        setPatientRecords(recs || []);
+      } catch (e) {
+        console.error('Chatbot failed to load medical context', e);
       }
     }
     loadData();
-  }, [currentUser]);
+  }, [currentUser, currentProfile, isOpen]);
+
+  // Update welcome message if language changes
+  useEffect(() => {
+    setMessages(prev => {
+      if (prev.length === 1 && prev[0].id === 'welcome_1') {
+        return [{
+          id: 'welcome_1',
+          sender: 'bot',
+          text: i18n.language === 'ta'
+            ? "வணக்கம்! நான் உங்கள் ஹெல்த் கோபைலட் உதவியாளர். உங்கள் பதிவேற்றப்பட்ட மருத்துவ ஆவணங்களின் அடிப்படையில் உங்கள் கேள்விகளுக்கு பதிலளிக்கிறேன். மருந்துகள் அல்லது ஆய்வக முடிவுகள் பற்றி என்ன தெரிந்து கொள்ள விரும்புகிறீர்கள்?"
+            : "Hello! I am your AI Health Copilot Assistant. I answer questions strictly based on your uploaded medical records. How can I help you today?",
+          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+        }];
+      }
+      return prev;
+    });
+  }, [i18n.language]);
 
   useEffect(() => {
     if (isOpen) {

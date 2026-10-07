@@ -394,16 +394,23 @@ PATIENT QUESTION:
   // Rule-based conversational records matcher
   const qLower = question.toLowerCase();
 
-  if (qLower.includes('medicine') || qLower.includes('medication') || qLower.includes('drug') || qLower.includes('tablet') || qLower.includes('மருந்து')) {
+  // 1. Medications / Prescriptions query
+  if (qLower.includes('medicine') || qLower.includes('medication') || qLower.includes('drug') || qLower.includes('tablet') || qLower.includes('dose') || qLower.includes('prescription') || qLower.includes('மருந்து') || qLower.includes('மாத்திரை')) {
     const allMeds = [];
     patientRecords.forEach(r => {
-      (r.medications || []).forEach(m => allMeds.push(`${m.name} (${m.dosage || ''} - ${m.frequency || ''})`));
+      (r.medications || []).forEach(m => allMeds.push(`${m.name} (${m.dosage || ''} • ${m.frequency || ''})`));
     });
+    // Also include profile current medicines if not in records
+    if (patientProfile?.currentMedicines && Array.isArray(patientProfile.currentMedicines)) {
+      patientProfile.currentMedicines.forEach(m => allMeds.push(m));
+    }
+
     if (allMeds.length > 0) {
+      const uniqueMeds = [...new Set(allMeds)];
       if (language === 'ta') {
-        return `உங்கள் மருத்துவ பதிவுகளின்படி, நீங்கள் எடுக்கும் மருந்துகள்:\n• ${[...new Set(allMeds)].join('\n• ')}\n\nகுறிப்பு: மருந்துகளை மாற்றவோ நிறுத்தவோ உங்கள் மருத்துவரிடம் கலந்தாலோசிக்கவும்.`;
+        return `உங்கள் மருத்துவ பதிவுகளின்படி, நீங்கள் எடுக்கும் மருந்துகள்:\n• ${uniqueMeds.join('\n• ')}\n\n⚠️ நினைவூட்டல்: மருத்துவரின் ஆலோசனை இல்லாமல் மருந்து அளவை மாற்றவோ நிறுத்தவோ வேண்டாம்.`;
       }
-      return `According to your health records, your recorded medications are:\n• ${[...new Set(allMeds)].join('\n• ')}\n\nAlways adhere to the specific dosages prescribed by your doctor.`;
+      return `According to your health records, your active recorded medications are:\n• ${uniqueMeds.join('\n• ')}\n\n⚠️ Always adhere to the specific instructions provided by your prescribing doctor.`;
     } else {
       return language === 'ta' 
         ? "உங்கள் பதிவுகளில் மருந்துகள் எதுவும் இன்னும் பதிவு செய்யப்படவில்லை. புதிய மருந்துச் சீட்டை பதிவேற்றவும்."
@@ -411,41 +418,116 @@ PATIENT QUESTION:
     }
   }
 
-  if (qLower.includes('sugar') || qLower.includes('diabetes') || qLower.includes('hba1c') || qLower.includes('glucose') || qLower.includes('சர்க்கரை')) {
+  // 2. Blood Sugar / HbA1c / Diabetes
+  if (qLower.includes('sugar') || qLower.includes('diabetes') || qLower.includes('hba1c') || qLower.includes('glucose') || qLower.includes('fbs') || qLower.includes('ppbs') || qLower.includes('சர்க்கரை') || qLower.includes('நீரிழிவு')) {
     const sugarTests = [];
     patientRecords.forEach(r => {
       (r.tests || []).forEach(t => {
-        if (/glucose|sugar|hba1c/i.test(t.name)) {
-          sugarTests.push(`${t.name}: ${t.value} ${t.unit || ''} (${r.date}) [${t.status}]`);
+        if (/glucose|sugar|hba1c|fbs|ppbs/i.test(t.name)) {
+          sugarTests.push(`${t.name}: ${t.value} ${t.unit || ''} (Date: ${r.date}) [Status: ${t.status || 'NORMAL'}]`);
+        }
+      });
+      // also check abnormalFlags
+      (r.abnormalFlags || []).forEach(f => {
+        if (/glucose|sugar|hba1c/i.test(f.parameter || '')) {
+          sugarTests.push(`${f.parameter}: ${f.value} [${f.status}] - ${f.explanationEn}`);
         }
       });
     });
+
     if (sugarTests.length > 0) {
+      const uniqueSugars = [...new Set(sugarTests)];
       if (language === 'ta') {
-        return `உங்கள் இரத்த சர்க்கரை மற்றும் HbA1c அளவுகளின் வரலாறு:\n• ${sugarTests.join('\n• ')}\n\nஇயல்பான இலக்குகளை பராமரிக்க சமச்சீரான உணவு மற்றும் உடற்பயிற்சியை தொடரவும்.`;
+        return `உங்கள் இரத்த சர்க்கரை மற்றும் HbA1c பரிசோதனை விவரங்கள்:\n• ${uniqueSugars.join('\n• ')}\n\nநீரிழிவு மேலாண்மைக்கு உணவு கட்டுப்பாடு மற்றும் உங்கள் மருத்துவ ஆலோசனையைத் தொடரவும்.`;
       }
-      return `Here are your recent blood sugar and HbA1c test readings:\n• ${sugarTests.join('\n• ')}\n\nConsult your endocrinologist or physician for continuous diabetes management.`;
+      return `Here are your recent blood sugar and HbA1c readings from your records:\n• ${uniqueSugars.join('\n• ')}\n\nTarget HbA1c is generally below 5.7% for non-diabetic and below 7.0% for managed diabetes. Consult your endocrinologist for titration.`;
     }
   }
 
-  if (qLower.includes('abnormal') || qLower.includes('test') || qLower.includes('report') || qLower.includes('அசாதாரண')) {
+  // 3. Cholesterol / Lipid / Heart
+  if (qLower.includes('cholesterol') || qLower.includes('lipid') || qLower.includes('triglyceride') || qLower.includes('ldl') || qLower.includes('hdl') || qLower.includes('கொழுப்பு') || qLower.includes('கொலஸ்ட்ரால்')) {
+    const lipidTests = [];
+    patientRecords.forEach(r => {
+      (r.tests || []).forEach(t => {
+        if (/cholesterol|triglyceride|lipid|ldl|hdl/i.test(t.name)) {
+          lipidTests.push(`${t.name}: ${t.value} ${t.unit || ''} (Date: ${r.date}) [${t.status || 'NORMAL'}]`);
+        }
+      });
+    });
+
+    if (lipidTests.length > 0) {
+      if (language === 'ta') {
+        return `உங்கள் கொலஸ்ட்ரால் மற்றும் லிப்பிட் விவரங்கள்:\n• ${lipidTests.join('\n• ')}\n\nஇதய ஆரோக்கியத்திற்காக கொழுப்பு குறைந்த உணவுகளை உட்கொள்ளவும்.`;
+      }
+      return `Here are your lipid panel test findings:\n• ${lipidTests.join('\n• ')}\n\nLifestyle modification, physical activity, and prescribed statins help manage elevated lipids.`;
+    }
+  }
+
+  // 4. Abnormal results / Issues / Red flags
+  if (qLower.includes('abnormal') || qLower.includes('warning') || qLower.includes('high') || qLower.includes('low') || qLower.includes('problem') || qLower.includes('அசாதாரண') || qLower.includes('எச்சரிக்கை')) {
     const flags = [];
     patientRecords.forEach(r => {
       (r.abnormalFlags || []).forEach(f => {
-        flags.push(`${f.parameter} (${f.value}) - ${f.status} [${r.date}]`);
+        const desc = language === 'ta' && f.explanationTa ? f.explanationTa : f.explanationEn;
+        flags.push(`${f.parameter} (${f.value}) [${f.status}] - ${desc}`);
       });
     });
+
     if (flags.length > 0) {
       if (language === 'ta') {
-        return `உங்கள் பதிவுகளில் கண்டறியப்பட்ட அசாதாரண அளவுகள்:\n• ${flags.join('\n• ')}\n\nஇந்த அளவுகளை சரிசெய்ய உங்கள் மருத்துவரிடம் மறுஆய்வு செய்யவும்.`;
+        return `உங்கள் பதிவுகளில் கண்டறியப்பட்ட அசாதாரண அளவுகள் (${flags.length}):\n• ${flags.join('\n• ')}\n\nஇந்த அளவுகளை உங்கள் அடுத்த மருத்துவ சந்திப்பில் மறுஆய்வு செய்யவும்.`;
       }
-      return `Key flagged observations across your records:\n• ${flags.join('\n• ')}\n\nPlease review these values with your healthcare provider during your next consultation.`;
+      return `Key flagged abnormal observations across your records (${flags.length}):\n• ${flags.join('\n• ')}\n\nPlease review these values with your healthcare provider during your next consultation.`;
+    } else {
+      return language === 'ta'
+        ? "நல்ல செய்தி! உங்கள் தற்போதைய பதிவுகளில் அசாதாரண அளவுகள் எதுவும் கொடியிடப்படவில்லை. அனைத்து அளவுகளும் இயல்பான வரம்பில் உள்ளன."
+        : "Good news! No abnormal flags were found in your currently uploaded medical records. All analyzed parameters are within standard acceptable limits.";
     }
   }
 
-  // Generic grounded fallback
-  if (language === 'ta') {
-    return `உங்கள் ஆரோக்கிய சுயவிவரம் மற்றும் ${patientRecords.length} பதிவுகளை ஆய்வு செய்துள்ளேன். உங்கள் கேள்வியான "${question}" குறித்து மேலும் விவரங்களை அறிய, குறிப்பிட்ட மருந்து அல்லது ஆய்வக அறிக்கையின் பெயரை கேட்கவும். மருத்துவ அவசரங்களுக்கு உங்கள் மருத்துவரை தொடர்பு கொள்ளவும்.`;
+  // 5. Allergies / Conditions query
+  if (qLower.includes('allergy') || qLower.includes('allergies') || qLower.includes('condition') || qLower.includes('ஒவ்வாமை') || qLower.includes('நோய்')) {
+    const allergies = patientProfile?.allergies || [];
+    const conditions = patientProfile?.chronicConditions || [];
+    
+    if (language === 'ta') {
+      return `உங்கள் மருத்துவ சுயவிவரத்தின்படி:\n• அறியப்பட்ட ஒவ்வாமைகள் (Allergies): ${allergies.length > 0 ? allergies.join(', ') : 'குறிப்பிடப்படவில்லை'}\n• நாள்பட்ட நோய்கள் (Chronic Conditions): ${conditions.length > 0 ? conditions.join(', ') : 'குறிப்பிடப்படவில்லை'}`;
+    }
+    return `According to your medical profile:\n• Known Allergies: ${allergies.length > 0 ? allergies.join(', ') : 'None recorded'}\n• Chronic Conditions: ${conditions.length > 0 ? conditions.join(', ') : 'None recorded'}`;
   }
-  return `I have reviewed your profile and ${patientRecords.length} health record(s). Regarding "${question}", you can ask specifically about your medications, blood sugar/HbA1c, or lab test trends. Remember that this information is grounded in your records and does not replace medical advice.`;
+
+  // 6. Doctor / Hospital query
+  if (qLower.includes('doctor') || qLower.includes('clinic') || qLower.includes('hospital') || qLower.includes('மருத்துவர்')) {
+    const doctors = patientRecords.map(r => r.doctorName).filter(Boolean);
+    const uniqueDocs = [...new Set(doctors)];
+    if (uniqueDocs.length > 0) {
+      if (language === 'ta') {
+        return `உங்கள் பதிவுகளில் பதிவு செய்யப்பட்டுள்ள மருத்துவர்கள்:\n• ${uniqueDocs.join('\n• ')}`;
+      }
+      return `Physicians and specialists associated with your medical records:\n• ${uniqueDocs.join('\n• ')}`;
+    }
+  }
+
+  // Generic grounded fallback with smart summary
+  if (language === 'ta') {
+    return `நான் உங்கள் ${patientRecords.length} மருத்துவ பதிவுகளையும் (${patientProfile?.fullName || 'நோயாளி'} - ABHA: ${patientProfile?.abhaId || 'Linked'}) ஆய்வு செய்துள்ளேன்.
+
+நீங்கள் என்னிடம் கேட்கக்கூடிய விவரங்கள்:
+1. "என் தற்போதைய மருந்துகள் என்னென்ன?"
+2. "கடைசி சர்க்கரை / HbA1c அளவு எவ்வளவு?"
+3. "எனக்கு என்னென்ன ஒவ்வாமைகள் உள்ளன?"
+4. "ஏதேனும் அசாதாரண முடிவுகள் உள்ளனவா?"
+
+மருத்துவ அவசரங்களுக்கு உடனடியாக 108 அல்லது 112 அழைக்கவும்.`;
+  }
+
+  return `I have reviewed your ${patientRecords.length} health record(s) for ${patientProfile?.fullName || 'Patient'} (ABHA: ${patientProfile?.abhaId || 'Active'}).
+
+You can ask me questions such as:
+1. "What are my active medications?"
+2. "What was my last blood sugar or HbA1c reading?"
+3. "Are there any abnormal lab results?"
+4. "What are my documented allergies and conditions?"
+
+Important: I am an AI assistant grounded in your uploaded records and cannot replace consultations with your doctor. For urgent chest pain or emergency symptoms, call 108 / 112 immediately.`;
 }
